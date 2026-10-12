@@ -1,0 +1,20 @@
+============================================
+  Eval Result Stats
+  Time: 2026-10-13 00:42:49
+  Model: competition_clean_4gpu_12k
+  Model path: /data1/models/lingbot-vla2/outputs/competition_clean_4gpu/checkpoints/global_step_12000/hf_ckpt
+  Tasks: 1
+  Episodes per task: 1
+  Task Config: demo_clean
+  Inference: 1 GPU x 1/GPU = 1 slots
+  Precision: use_bf16=False, use_fp32=True, use_compile=True
+  Result: 0 done, 1 skipped
+============================================
+
+Task                           Time(s)    Done(1)      Success/Total Rate      
+--------------------------------------------------------------------------------
+lift_pot                       5          NO(0/1)      -          -         
+--------------------------------------------------------------------------------
+Summary: total 20s, success 0/0, overall rate 0.0%
+Warning: some tasks did not complete 1 episodes; check logs
+============================================

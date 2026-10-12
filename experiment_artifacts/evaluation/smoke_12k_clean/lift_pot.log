@@ -1,0 +1,51 @@
+
+================================================================
+  [attempt 1/3] 2026-10-13 00:42:29
+  task=lift_pot  slot=0  gpu=4  port=9330
+================================================================
+Traceback (most recent call last):
+  File "/home/wjq/workspace/lingbo/RoboTwin-legacy/script/eval_policy_client_lingbotvla.py", line 8, in <module>
+    from envs import CONFIGS_PATH
+  File "/home/wjq/workspace/lingbo/RoboTwin-legacy/./envs/__init__.py", line 1, in <module>
+    from .utils import *
+  File "/home/wjq/workspace/lingbo/RoboTwin-legacy/./envs/utils/__init__.py", line 5, in <module>
+    from .rand_create_cluttered_actor import *
+  File "/home/wjq/workspace/lingbo/RoboTwin-legacy/./envs/utils/rand_create_cluttered_actor.py", line 90, in <module>
+    cluttered_objects_info, cluttered_objects_list, same_obj = get_all_cluttered_objects()
+  File "/home/wjq/workspace/lingbo/RoboTwin-legacy/./envs/utils/rand_create_cluttered_actor.py", line 17, in get_all_cluttered_objects
+    cluttered_objects_config = json.load(open(Path("./assets/objects/objaverse/list.json"), "r", encoding="utf-8"))
+FileNotFoundError: [Errno 2] No such file or directory: 'assets/objects/objaverse/list.json'
+
+================================================================
+  [attempt 2/3] 2026-10-13 00:42:34
+  task=lift_pot  slot=0  gpu=4  port=9330
+================================================================
+Traceback (most recent call last):
+  File "/home/wjq/workspace/lingbo/RoboTwin-legacy/script/eval_policy_client_lingbotvla.py", line 8, in <module>
+    from envs import CONFIGS_PATH
+  File "/home/wjq/workspace/lingbo/RoboTwin-legacy/./envs/__init__.py", line 1, in <module>
+    from .utils import *
+  File "/home/wjq/workspace/lingbo/RoboTwin-legacy/./envs/utils/__init__.py", line 5, in <module>
+    from .rand_create_cluttered_actor import *
+  File "/home/wjq/workspace/lingbo/RoboTwin-legacy/./envs/utils/rand_create_cluttered_actor.py", line 90, in <module>
+    cluttered_objects_info, cluttered_objects_list, same_obj = get_all_cluttered_objects()
+  File "/home/wjq/workspace/lingbo/RoboTwin-legacy/./envs/utils/rand_create_cluttered_actor.py", line 17, in get_all_cluttered_objects
+    cluttered_objects_config = json.load(open(Path("./assets/objects/objaverse/list.json"), "r", encoding="utf-8"))
+FileNotFoundError: [Errno 2] No such file or directory: 'assets/objects/objaverse/list.json'
+
+================================================================
+  [attempt 3/3] 2026-10-13 00:42:39
+  task=lift_pot  slot=0  gpu=4  port=9330
+================================================================
+Traceback (most recent call last):
+  File "/home/wjq/workspace/lingbo/RoboTwin-legacy/script/eval_policy_client_lingbotvla.py", line 8, in <module>
+    from envs import CONFIGS_PATH
+  File "/home/wjq/workspace/lingbo/RoboTwin-legacy/./envs/__init__.py", line 1, in <module>
+    from .utils import *
+  File "/home/wjq/workspace/lingbo/RoboTwin-legacy/./envs/utils/__init__.py", line 5, in <module>
+    from .rand_create_cluttered_actor import *
+  File "/home/wjq/workspace/lingbo/RoboTwin-legacy/./envs/utils/rand_create_cluttered_actor.py", line 90, in <module>
+    cluttered_objects_info, cluttered_objects_list, same_obj = get_all_cluttered_objects()
+  File "/home/wjq/workspace/lingbo/RoboTwin-legacy/./envs/utils/rand_create_cluttered_actor.py", line 17, in get_all_cluttered_objects
+    cluttered_objects_config = json.load(open(Path("./assets/objects/objaverse/list.json"), "r", encoding="utf-8"))
+FileNotFoundError: [Errno 2] No such file or directory: 'assets/objects/objaverse/list.json'

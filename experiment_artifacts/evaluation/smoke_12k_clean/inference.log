@@ -1,0 +1,3 @@
+Overwriting feature type 'VideoFrame' (VideoFrame -> VideoFrame)
+[INFO][lingbotvla.models.vla.lingbot_vla.qwen3vl_in_vla:114] 10/13/2026 00:42:33 >> apply Qwen3-VL Lingbot patch
+You are attempting to use Flash Attention 2 without specifying a torch dtype. This might lead to unexpected behaviour
