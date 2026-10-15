@@ -1,0 +1,1 @@
+robotwin /data1/models/lingbot-vla2/data/RoboTwin2.0-official/RoboTwin_lerobot_v21

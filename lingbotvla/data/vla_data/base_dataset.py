@@ -23,9 +23,9 @@ from torchvision.transforms.v2 import Resize
 
 try:
     from lerobot.datasets.lerobot_dataset import LeRobotDataset as BaseLeRobotDataset
-    from lerobot.datasets.lerobot_dataset import LeRobotDatasetMetadata
+    from lerobot.datasets.lerobot_dataset import LeRobotDatasetMetadata, CODEBASE_VERSION
     from lerobot.datasets.utils import hf_transform_to_torch
-    LEROBOT_DATASET_API = "v3"
+    LEROBOT_DATASET_API = "v3" if CODEBASE_VERSION.startswith("v3") else "v2"
 except ImportError:
     from lerobot.common.datasets.lerobot_dataset import LeRobotDataset as BaseLeRobotDataset
     from lerobot.common.datasets.lerobot_dataset import LeRobotDatasetMetadata

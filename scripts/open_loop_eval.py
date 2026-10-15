@@ -15,8 +15,8 @@ import yaml
 from lingbotvla.data.vla_data.base_dataset import LeRobotDataset
 
 try:
-    from lerobot.datasets.lerobot_dataset import LeRobotDatasetMetadata
-    LEROBOT_DATASET_API = "v3"
+    from lerobot.datasets.lerobot_dataset import LeRobotDatasetMetadata, CODEBASE_VERSION
+    LEROBOT_DATASET_API = "v3" if CODEBASE_VERSION.startswith("v3") else "v2"
 except ImportError:
     from lerobot.common.datasets.lerobot_dataset import LeRobotDatasetMetadata
     LEROBOT_DATASET_API = "v2"

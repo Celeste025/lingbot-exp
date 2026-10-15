@@ -167,7 +167,11 @@ def main(usr_args):
 
     st_seed = 100000 * (1 + seed)
     suc_nums = []
-    test_num = 100
+    # Competition submission uses 100 trials/task.  Keep that as the default,
+    # but permit short smoke/screening runs through the launcher override.
+    test_num = int(usr_args.get("test_num", 100))
+    if test_num < 1:
+        raise ValueError(f"test_num must be positive, got {test_num}")
     topk = 1
 
     # model = get_model(usr_args)

@@ -364,6 +364,14 @@ class TrainingArguments:
         default="constant",
         metadata={"help": "Name of the learning rate scheduler."},
     )
+    lr_anneal_start_step: int = field(
+        default=0,
+        metadata={"help": "Global step where cosine_resume starts."},
+    )
+    lr_anneal_start: Optional[float] = field(
+        default=None,
+        metadata={"help": "Learning rate at lr_anneal_start_step for cosine_resume."},
+    )
     lr_decay_ratio: float = field(
         default=1.0,
         metadata={"help": "Ratio of learning rate decay steps."},

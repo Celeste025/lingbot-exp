@@ -5,13 +5,14 @@ export PYTHONNOUSERSITE=1
 export PIP_NO_INPUT=1
 
 ENV_NAME="lingbotvla"
+ENV_PREFIX_OVERRIDE=""
 RECREATE=0
 RESUME=0
 FLASH_ATTN_WHEEL="${FLASH_ATTN_WHEEL:-}"
 
 usage() {
   cat <<'USAGE'
-Usage: bash tools/create_train_env.sh [--env-name NAME] [--recreate] [--resume] [--flash-attn-wheel PATH]
+Usage: bash tools/create_train_env.sh [--env-name NAME] [--env-prefix PATH] [--recreate] [--resume] [--flash-attn-wheel PATH]
 
 Creates a clean Python 3.12 conda environment for lingbotvla training.
 Depth dependencies and local depth packages are always installed.
@@ -25,6 +26,10 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --env-name)
       ENV_NAME="${2:?--env-name requires a value}"
+      shift 2
+      ;;
+    --env-prefix)
+      ENV_PREFIX_OVERRIDE="${2:?--env-prefix requires a value}"
       shift 2
       ;;
     --recreate)
@@ -57,20 +62,16 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 CONDA_BASE="$(conda info --base)"
 eval "$(conda shell.bash hook)"
 
-ENV_PREFIX="${CONDA_BASE}/envs/${ENV_NAME}"
+ENV_PREFIX="${ENV_PREFIX_OVERRIDE:-${CONDA_BASE}/envs/${ENV_NAME}}"
 ENV_EXISTS=0
-if conda env list | awk '{print $1}' | grep -Fxq "${ENV_NAME}"; then
-  ENV_EXISTS=1
-fi
+if [[ -d "${ENV_PREFIX}" ]]; then ENV_EXISTS=1; fi
 
 if [[ "${ENV_EXISTS}" == "1" || -d "${ENV_PREFIX}" ]]; then
   if [[ "${RECREATE}" == "1" ]]; then
-    if [[ "${ENV_EXISTS}" == "1" ]]; then
-      conda env remove -n "${ENV_NAME}" -y
-    fi
+    if [[ "${ENV_PREFIX_OVERRIDE}" == "" ]]; then conda env remove -n "${ENV_NAME}" -y; fi
     if [[ -d "${ENV_PREFIX}" ]]; then
       case "${ENV_PREFIX}" in
-        "${CONDA_BASE}/envs/"*) rm -rf "${ENV_PREFIX}" ;;
+        "${CONDA_BASE}/envs/"*|/data1/lingbot-vla2/*) rm -rf "${ENV_PREFIX}" ;;
         *) echo "Refusing to remove unexpected env prefix: ${ENV_PREFIX}" >&2; exit 1 ;;
       esac
     fi
@@ -85,9 +86,13 @@ if [[ "${ENV_EXISTS}" == "1" || -d "${ENV_PREFIX}" ]]; then
 fi
 
 if [[ "${RESUME}" != "1" || "${ENV_EXISTS}" != "1" ]]; then
-  conda create -n "${ENV_NAME}" python=3.12 pip -y
+  if [[ -n "${ENV_PREFIX_OVERRIDE}" ]]; then
+    conda create -p "${ENV_PREFIX}" python=3.12 pip -y
+  else
+    conda create -n "${ENV_NAME}" python=3.12 pip -y
+  fi
 fi
-conda activate "${ENV_NAME}"
+conda activate "${ENV_PREFIX}"
 
 python -m pip install -U pip setuptools wheel
 
@@ -130,7 +135,7 @@ print("flash_attn", getattr(flash_attn, "__version__", "unknown"))
 PY
 
 python -m pip install --no-deps \
-  "lerobot @ https://github.com/huggingface/lerobot/archive/refs/tags/v0.4.2.tar.gz"
+  "lerobot @ https://github.com/huggingface/lerobot/archive/refs/tags/v0.3.3.tar.gz"
 assert_torch_stack
 
 python -m pip install -e "${REPO_ROOT}" --no-deps
@@ -158,7 +163,9 @@ pth.write_text("${REPO_ROOT}/lingbotvla/models/vla/vision_models/morgbd_clean/3r
 print("wrote", pth)
 PY
 python -m pip install -e "${REPO_ROOT}/lingbotvla/models/vla/vision_models/lingbot-depth" --no-deps
-python -m pip install -e "${REPO_ROOT}/lingbotvla/models/vla/vision_models/MoGe"
+# MoGe's declared UI/demo dependencies unconstrain numpy and huggingface-hub;
+# training imports only its model code and uses the repository-pinned stack.
+python -m pip install -e "${REPO_ROOT}/lingbotvla/models/vla/vision_models/MoGe" --no-deps
 assert_torch_stack
 
 python - <<'PY'

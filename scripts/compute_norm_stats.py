@@ -26,6 +26,7 @@ import lingbotvla.utils.normalize as normalize
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from tasks.vla.train_lingbotvla import MyTrainingArguments, MyDataArguments
+from scripts.validate_robotwin_joint_data import validate_dataset_source
 
 logger = helper.create_logger(__name__)
 
@@ -179,6 +180,14 @@ def _init_dataset_worker(
 if __name__ == "__main__":
 
     args = parse_args(Arguments)
+
+    if args.data.datasets_type == 'vla':
+        schema_errors = validate_dataset_source(args.data.data_name, args.data.train_path)
+        if schema_errors:
+            raise ValueError(
+                f"RoboTwin normalization input is incompatible with the 14-D qpos robot config "
+                f"({len(schema_errors)} dataset errors):\n" + "\n".join(schema_errors[:4])
+            )
 
     # Distributed initialization: reuse train.sh + torchrun; RANK/WORLD_SIZE/LOCAL_RANK are already injected via env vars
     if args.train.world_size > 1 and not dist.is_initialized():

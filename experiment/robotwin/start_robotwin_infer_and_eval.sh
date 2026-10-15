@@ -17,7 +17,10 @@
 #   --pid_name          PID file prefix (default: test_pid)
 #   --num_tasks         number of sim tasks, taken in order from the task list (default: 50, max: 50)
 #   --num_gpus          total GPUs (default: 1)
+#   --gpu_ids           comma-separated physical GPU IDs (default: 0..num_gpus-1)
 #   --num_per_gpu       inference servers per GPU (default: 1)
+#   --sim_per_server    concurrent sim workers sharing each inference server (default: 1)
+#   --episodes_per_task simulation rollouts per task (default: 100; use 1 for smoke, 10 for screening)
 #   --use_length        chunk length (default: 50)
 #   --robo_name         robot config name (default: robotwin)
 #   --video_fps         video recording fps (default: 10)
@@ -34,7 +37,9 @@
 # ============================================================
 
 # ===== Parse keyword arguments =====
-export QWEN3VL_PATH="${QWEN3VL_PATH:-/path/to/your/checkpoints/Qwen3-VL-4B-Instruct}"
+# The evaluation host keeps the shared Qwen3-VL backbone here.  Still honour
+# an explicit export so other deployments can point to a different location.
+export QWEN3VL_PATH="${QWEN3VL_PATH:-/data1/models/lingbot-vla2/models/Qwen3-VL-4B-Instruct}"
 
 project_root="$(pwd)"
 inference_workdir="${project_root}/"
@@ -50,7 +55,10 @@ start_port=9330
 pid_name="test_pid"
 num_tasks=50
 num_gpus=1
+gpu_ids="${GPU_IDS:-}"
 num_per_gpu=1
+sim_per_server=1
+episodes_per_task=100
 use_length=50
 use_bf16=False
 use_fp32=True
@@ -73,7 +81,10 @@ while [[ $# -gt 0 ]]; do
         --pid_name)          pid_name="$2";          shift 2 ;;
         --num_tasks)         num_tasks="$2";         shift 2 ;;
         --num_gpus)          num_gpus="$2";          shift 2 ;;
+        --gpu_ids)           gpu_ids="$2";           shift 2 ;;
         --num_per_gpu)       num_per_gpu="$2";       shift 2 ;;
+        --sim_per_server)    sim_per_server="$2";    shift 2 ;;
+        --episodes_per_task) episodes_per_task="$2"; shift 2 ;;
         --use_length)        use_length="$2";        shift 2 ;;
         --use_bf16)          use_bf16="$2";        shift 2 ;;
         --use_fp32)          use_fp32="$2";        shift 2 ;;
@@ -100,7 +111,10 @@ while [[ $# -gt 0 ]]; do
             echo "  --pid_name          PID file prefix (default: test_pid)"
             echo "  --num_tasks         number of sim tasks (default: 50, max: 50)"
             echo "  --num_gpus          total GPUs (default: 1)"
+            echo "  --gpu_ids           comma-separated physical GPU IDs (default: 0..num_gpus-1)"
             echo "  --num_per_gpu       inference servers per GPU (default: 1)"
+            echo "  --sim_per_server    concurrent sim workers per inference server (default: 1)"
+            echo "  --episodes_per_task simulation rollouts per task (default: 100)"
             echo "  --use_length        chunk length (default: 50)"
             echo "  --use_bf16          use bfloat16 inference (default: False)"
             echo "  --use_fp32          use float32 inference (default: True; release reproduction setting)"
@@ -116,6 +130,25 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+# Allow shared machines to use a non-contiguous set of idle physical devices
+# without rewriting CUDA_VISIBLE_DEVICES outside the launcher.
+if [ -n "$gpu_ids" ]; then
+    IFS=',' read -r -a gpu_id_list <<< "$gpu_ids"
+    if [ "${#gpu_id_list[@]}" -eq 0 ]; then
+        echo -e "\033[31mError: --gpu_ids is empty.\033[0m"
+        exit 1
+    fi
+    for gpu_id in "${gpu_id_list[@]}"; do
+        [[ "$gpu_id" =~ ^[0-9]+$ ]] || { echo -e "\033[31mError: invalid GPU ID '$gpu_id'.\033[0m"; exit 1; }
+    done
+    num_gpus="${#gpu_id_list[@]}"
+else
+    gpu_id_list=()
+    for gpu_id in $(seq 0 $((num_gpus - 1))); do
+        gpu_id_list+=("$gpu_id")
+    done
+fi
+
 
 # ===== Common environment =====
 # Cleanup: kill all child processes on exit / Ctrl-C / kill
@@ -123,7 +156,7 @@ cleanup() {
     echo ""
     echo -e "\033[33m=== Cleaning up all child processes ===\033[0m"
     # Kill inference servers
-    for slot in $(seq 0 $((num_slots-1))); do
+    for slot in $(seq 0 $((num_inference_slots-1))); do
         local_pid=${inference_pids[$slot]:-0}
         if [ "$local_pid" != "0" ] && kill -0 "$local_pid" 2>/dev/null; then
             kill -TERM -- -"$(ps -o pgid= -p "$local_pid" 2>/dev/null | tr -d ' ')" 2>/dev/null \
@@ -131,7 +164,7 @@ cleanup() {
         fi
     done
     # Kill eval workers
-    for slot in $(seq 0 $((num_slots-1))); do
+    for slot in $(seq 0 $((num_inference_slots-1))); do
         local_pid=${slot_pid[$slot]:-0}
         if [ "$local_pid" != "0" ] && kill -0 "$local_pid" 2>/dev/null; then
             kill -TERM -- -"$(ps -o pgid= -p "$local_pid" 2>/dev/null | tr -d ' ')" 2>/dev/null \
@@ -140,8 +173,15 @@ cleanup() {
     done
     sleep 1
     # Force kill survivors
+    for slot in $(seq 0 $((num_inference_slots-1))); do
+        local_pid=${inference_pids[$slot]:-0}
+        if [ "$local_pid" != "0" ] && kill -0 "$local_pid" 2>/dev/null; then
+            kill -KILL -- -"$(ps -o pgid= -p "$local_pid" 2>/dev/null | tr -d ' ')" 2>/dev/null \
+                || kill -KILL "$local_pid" 2>/dev/null || true
+        fi
+    done
     for slot in $(seq 0 $((num_slots-1))); do
-        for local_pid in ${inference_pids[$slot]:-0} ${slot_pid[$slot]:-0}; do
+        for local_pid in ${slot_pid[$slot]:-0}; do
             if [ "$local_pid" != "0" ] && kill -0 "$local_pid" 2>/dev/null; then
                 kill -KILL -- -"$(ps -o pgid= -p "$local_pid" 2>/dev/null | tr -d ' ')" 2>/dev/null \
                     || kill -KILL "$local_pid" 2>/dev/null || true
@@ -197,6 +237,14 @@ if [ "$num_tasks" -gt 50 ]; then
     echo -e "\033[31mError: num_tasks ${num_tasks} exceeds max 50; use 1~50\033[0m"
     exit 1
 fi
+if ! [[ "$episodes_per_task" =~ ^[1-9][0-9]*$ ]]; then
+    echo -e "\033[31mError: --episodes_per_task must be a positive integer\033[0m"
+    exit 1
+fi
+if ! [[ "$sim_per_server" =~ ^[1-9][0-9]*$ ]]; then
+    echo -e "\033[31mError: --sim_per_server must be a positive integer.\033[0m"
+    exit 1
+fi
 
 # ===== Sim-side args =====
 policy_name=ACT
@@ -204,12 +252,15 @@ train_config_name=0
 seed=0
 
 # ===== Compute inference slot count =====
-# actual slots = min(num_tasks, num_gpus * num_per_gpu)
-# When tasks < max concurrency, spin up only as many servers as tasks to avoid
-# the waste of starting then shutting down extras.
-num_slots=$(( num_gpus * num_per_gpu ))
+# Keep inference servers resident and allow multiple independent RoboTwin
+# processes to share each websocket server. This exposes otherwise-idle CPU
+# capacity without duplicating the model in GPU memory.
+num_inference_slots=$(( num_gpus * num_per_gpu ))
+if [ "$num_tasks" -lt "$num_inference_slots" ]; then
+    num_inference_slots=$num_tasks
+fi
+num_slots=$(( num_inference_slots * sim_per_server ))
 if [ "$num_tasks" -lt "$num_slots" ]; then
-    echo -e "\033[36mnum_tasks ${num_tasks} < max slots ${num_slots}; starting servers by task count\033[0m"
     num_slots=$num_tasks
 fi
 
@@ -222,7 +273,8 @@ for i in $(seq 0 $((num_tasks-1))); do
     task_queue+=("${task_list_all[$i]}")
 done
 echo -e "\033[36mTasks this run (${num_tasks}): ${task_queue[*]}\033[0m"
-echo -e "\033[36mInference config: ${num_gpus} GPU x ${num_per_gpu} servers/GPU = ${num_slots} slots\033[0m"
+echo -e "\033[36mEpisodes per task: ${episodes_per_task}\033[0m"
+echo -e "\033[36mInference config: ${num_gpus} GPU x ${num_per_gpu} servers/GPU = ${num_inference_slots} servers; ${sim_per_server} sim workers/server = ${num_slots} sim slots\033[0m"
 echo -e "\033[36mInference precision: use_bf16=${use_bf16}, use_fp32=${use_fp32}, use_compile=${use_compile}\033[0m"
 
 # ===== Common variables =====
@@ -250,12 +302,12 @@ declare -a result_status=()
 # ============================================================
 # Phase 1: start inference-side QwenPi servers (resident)
 # ============================================================
-echo -e "\033[32m========== Starting inference side: ${num_slots} QwenPi servers, ports ${start_port}~$((start_port + num_slots - 1)) ==========\033[0m"
+echo -e "\033[32m========== Starting inference side: ${num_inference_slots} QwenPi servers, ports ${start_port}~$((start_port + num_inference_slots - 1)) ==========\033[0m"
 
 cd "$inference_workdir" || { echo -e "\033[31mError: inference workdir ${inference_workdir} missing\033[0m"; exit 1; }
 
-for slot in $(seq 0 $((num_slots-1))); do
-    gpu_id=$(( slot % num_gpus ))
+for slot in $(seq 0 $((num_inference_slots-1))); do
+    gpu_id="${gpu_id_list[$(( slot % num_gpus ))]}"
     port=$(( start_port + slot ))
 
     export CUDA_VISIBLE_DEVICES=${gpu_id}
@@ -282,26 +334,26 @@ for slot in $(seq 0 $((num_slots-1))); do
     echo "${pid}" >> "$inference_pid_file"
 done
 
-echo -e "\033[32m${num_slots} inference servers started, PIDs saved to ${inference_pid_file}\033[0m"
+echo -e "\033[32m${num_inference_slots} inference servers started, PIDs saved to ${inference_pid_file}\033[0m"
 
 # Record each slot's inference server PID for on-demand shutdown
 declare -a inference_pids=()
-for slot in $(seq 0 $((num_slots-1))); do
+for slot in $(seq 0 $((num_inference_slots-1))); do
     inference_pids[$slot]=0
 done
 # Re-read PIDs (in launch order, mapping 1:1 to slots)
 mapfile -t pid_list < "$inference_pid_file"
-for slot in $(seq 0 $((num_slots-1))); do
+for slot in $(seq 0 $((num_inference_slots-1))); do
     if [ $slot -lt ${#pid_list[@]} ]; then
         inference_pids[$slot]=${pid_list[$slot]}
     fi
 done
-active_inference=$num_slots
+active_inference=$num_inference_slots
 
 # ============================================================
 # Phase 2: queue-scheduled sim tasks
 # ============================================================
-echo -e "\033[32m========== Starting sim side (queue-scheduled, ${num_slots} concurrent slots) ==========\033[0m"
+echo -e "\033[32m========== Starting sim side (queue-scheduled, ${num_slots} concurrent slots over ${num_inference_slots} servers) ==========\033[0m"
 
 cd "$eval_workdir" || { echo -e "\033[31mError: sim workdir ${eval_workdir} missing\033[0m"; exit 1; }
 
@@ -310,12 +362,12 @@ cd "$eval_workdir" || { echo -e "\033[31mError: sim workdir ${eval_workdir} miss
 # must live at <RoboTwin>/script/ for _camera_config.yml to be found.
 eval_client_src="${inference_workdir}experiment/robotwin/eval_policy_client_lingbotvla.py"
 eval_client_dst="${eval_workdir}/script/eval_policy_client_lingbotvla.py"
-if [ ! -f "$eval_client_dst" ]; then
-    if [ ! -f "$eval_client_src" ]; then
-        echo -e "\033[31mError: eval client source not found: ${eval_client_src}\033[0m"
-        exit 1
-    fi
-    echo -e "\033[36mCopying eval client -> ${eval_client_dst}\033[0m"
+if [ ! -f "$eval_client_src" ]; then
+    echo -e "\033[31mError: eval client source not found: ${eval_client_src}\033[0m"
+    exit 1
+fi
+if ! cmp -s "$eval_client_src" "$eval_client_dst"; then
+    echo -e "\033[36mUpdating eval client -> ${eval_client_dst}\033[0m"
     cp "$eval_client_src" "$eval_client_dst"
 fi
 
@@ -326,14 +378,12 @@ deploy_pkg_src="${inference_workdir}deploy"
 deploy_pkg_dst="${eval_workdir}/script/deploy"
 mkdir -p "$deploy_pkg_dst"
 for f in __init__.py websocket_client_policy.py msgpack_numpy.py; do
-    if [ ! -f "$deploy_pkg_dst/$f" ]; then
-        if [ ! -f "$deploy_pkg_src/$f" ]; then
-            echo -e "\033[31mError: deploy helper source not found: ${deploy_pkg_src}/${f}\033[0m"
-            exit 1
-        fi
-        echo -e "\033[36mCopying deploy helper -> ${deploy_pkg_dst}/${f}\033[0m"
-        cp "$deploy_pkg_src/$f" "$deploy_pkg_dst/$f"
+    if [ ! -f "$deploy_pkg_src/$f" ]; then
+        echo -e "\033[31mError: deploy helper source not found: ${deploy_pkg_src}/${f}\033[0m"
+        exit 1
     fi
+    # A stale pre-existing copy silently preserves old protocol/retry logic.
+    cp "$deploy_pkg_src/$f" "$deploy_pkg_dst/$f"
 done
 
 # ===== Ensure curobo absolute paths point at this RoboTwin checkout =====
@@ -384,6 +434,15 @@ done
 # Queue pointer and retry counters
 queue_idx=0
 max_retries=3
+# A small number of RobotWin scenes can deadlock inside the simulator after
+# creating the client process.  Successful 10-episode tasks observed here are
+# well below 20 minutes, so recycle only genuinely stalled workers.  This is
+# configurable for unusually slow hosts without changing the launcher.
+task_timeout_seconds="${TASK_TIMEOUT_SECONDS:-1200}"
+if ! [[ "$task_timeout_seconds" =~ ^[0-9]+$ ]] || [ "$task_timeout_seconds" -le 0 ]; then
+    echo "Error: TASK_TIMEOUT_SECONDS must be a positive integer (got: ${task_timeout_seconds})" >&2
+    exit 2
+fi
 declare -A task_retries=()
 for t in "${task_queue[@]}"; do
     task_retries[$t]=0
@@ -393,8 +452,9 @@ done
 launch_task() {
     local slot=$1
     local task_name=$2
-    local gpu_id=$(( slot % num_gpus ))
-    local port=$(( start_port + slot ))
+    local server_slot=$(( slot % num_inference_slots ))
+    local gpu_id="${gpu_id_list[$(( server_slot % num_gpus ))]}"
+    local port=$(( start_port + server_slot ))
 
     export CUDA_VISIBLE_DEVICES=${gpu_id}
 
@@ -408,7 +468,7 @@ launch_task() {
         echo ""
         echo "================================================================"
         echo "  [attempt ${attempt}/${max_retries}] $(date '+%Y-%m-%d %H:%M:%S')"
-        echo "  task=${task_name}  slot=${slot}  gpu=${gpu_id}  port=${port}"
+        echo "  task=${task_name}  sim_slot=${slot}  server_slot=${server_slot}  gpu=${gpu_id}  port=${port}"
         echo "================================================================"
     } >> "$log_file"
 
@@ -427,6 +487,7 @@ launch_task() {
         --task_config ${task_config} \
         --train_config_name ${train_config_name} \
         --seed ${seed} \
+        --test_num ${episodes_per_task} \
         --policy_name ${policy_name} \
         --port ${port} \
         --robo_name ${robo_name} \
@@ -494,6 +555,23 @@ while [ $((completed + skipped)) -lt $total_tasks ] && has_running; do
         # Skip free slots
         [ "$pid" = "0" ] && continue
 
+        # A live PID is not sufficient evidence of useful work: the simulator
+        # can occasionally deadlock while its Python client remains resident.
+        # Terminate just this task process group; the normal nonzero-exit path
+        # below records it and retries on the same slot.
+        task_now=$(date +%s)
+        task_elapsed=$(( task_now - slot_start[$slot] ))
+        if kill -0 "$pid" 2>/dev/null && [ "$task_elapsed" -ge "$task_timeout_seconds" ]; then
+            task_name="${slot_task[$slot]}"
+            echo -e "\033[31m  [timeout] ${task_name} slot $slot exceeded ${task_timeout_seconds}s; terminating for retry\033[0m"
+            task_pgid=$(ps -o pgid= -p "$pid" 2>/dev/null | tr -d ' ')
+            if [ -n "$task_pgid" ]; then
+                kill -TERM -- "-${task_pgid}" 2>/dev/null || kill -TERM "$pid" 2>/dev/null || true
+            else
+                kill -TERM "$pid" 2>/dev/null || true
+            fi
+        fi
+
         # Check whether the process has exited
         if ! kill -0 "$pid" 2>/dev/null; then
             task_end_time=$(date +%s)
@@ -551,14 +629,17 @@ while [ $((completed + skipped)) -lt $total_tasks ] && has_running; do
         fi
     done
 
-    # Adaptive shutdown: when remaining tasks < active inference servers, stop idle-slot servers
-    remaining=$(remaining_tasks)
-    for slot in $(seq 0 $((num_slots-1))); do
-        [ $remaining -lt $active_inference ] || break
-        if [ "${slot_pid[$slot]}" = "0" ] && [ "${inference_pids[$slot]}" != "0" ]; then
-            shutdown_inference_slot $slot
-        fi
-    done
+    # With a shared server, another sim slot may still be using it. Keep all
+    # inference servers alive until cleanup rather than racing a live client.
+    if [ "$sim_per_server" -eq 1 ]; then
+        remaining=$(remaining_tasks)
+        for slot in $(seq 0 $((num_inference_slots-1))); do
+            [ $remaining -lt $active_inference ] || break
+            if [ "${slot_pid[$slot]}" = "0" ] && [ "${inference_pids[$slot]}" != "0" ]; then
+                shutdown_inference_slot $slot
+            fi
+        done
+    fi
 
     sleep 5
 done
@@ -584,13 +665,14 @@ echo -e "\033[36mGenerating stats file: ${stats_file}\033[0m"
     echo "  Model: ${_exp_name}_${_step_k}"
     echo "  Model path: ${model_path}"
     echo "  Tasks: ${num_tasks}"
+    echo "  Episodes per task: ${episodes_per_task}"
     echo "  Task Config: ${task_config}"
     echo "  Inference: ${num_gpus} GPU x ${num_per_gpu}/GPU = ${num_slots} slots"
     echo "  Precision: use_bf16=${use_bf16}, use_fp32=${use_fp32}, use_compile=${use_compile}"
     echo "  Result: ${completed} done, ${skipped} skipped"
     echo "============================================"
     echo ""
-    printf "%-30s %-10s %-12s %-10s %-10s\n" "Task" "Time(s)" "Done(100)" "Success/Total" "Rate"
+    printf "%-30s %-10s %-12s %-10s %-10s\n" "Task" "Time(s)" "Done(${episodes_per_task})" "Success/Total" "Rate"
     echo "--------------------------------------------------------------------------------"
 
     total_success=0
@@ -621,17 +703,17 @@ echo -e "\033[36mGenerating stats file: ${stats_file}\033[0m"
             fi
         fi
 
-        # Check whether all 100 episodes ran
+        # Check whether every requested rollout completed.
         if [ "$episodes_done" != "-" ]; then
             total_ep=$(echo "$episodes_done" | cut -d'/' -f2)
-            if [ "$total_ep" = "100" ]; then
+            if [ "$total_ep" = "$episodes_per_task" ]; then
                 complete_mark="YES"
             else
-                complete_mark="NO(${total_ep}/100)"
+                complete_mark="NO(${total_ep}/${episodes_per_task})"
                 all_complete=false
             fi
         else
-            complete_mark="NO(0/100)"
+            complete_mark="NO(0/${episodes_per_task})"
             all_complete=false
         fi
 
@@ -646,9 +728,9 @@ echo -e "\033[36mGenerating stats file: ${stats_file}\033[0m"
     fi
     printf "Summary: total %ds, success %d/%d, overall rate %s%%\n" "$total_duration" "$total_success" "$total_episodes" "$overall_rate"
     if $all_complete; then
-        echo "All tasks fully executed 100 episodes"
+        echo "All tasks fully executed ${episodes_per_task} episodes"
     else
-        echo "Warning: some tasks did not complete 100 episodes; check logs"
+        echo "Warning: some tasks did not complete ${episodes_per_task} episodes; check logs"
     fi
     echo "============================================"
 } | tee "$stats_file"
