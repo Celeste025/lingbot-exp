@@ -1,5 +1,5 @@
 # Tianchi / RoboTwin clean-only post-training configuration.
-# Effective global batch = 2 micro batches/GPU * 4 GPUs * 32 accumulation = 256.
+# The official 8k launcher sets micro batch 32 x 4 GPUs x accumulation 2 = 256.
 model:
   model_path: /data1/models/lingbot-vla2/models/lingbot-vla-v2-6b
   tokenizer_path: /data1/models/lingbot-vla2/models/Qwen3-VL-4B-Instruct
@@ -11,7 +11,7 @@ model:
 data:
   datasets_type: vla
   data_name: multi
-  train_path: assets/training_data/robotwin_clean_50.txt
+  train_path: assets/training_data/robotwin_official_clean_v21.txt
   robot_config_root: ./configs/robot_configs
   joints:
     - arm.position: 14

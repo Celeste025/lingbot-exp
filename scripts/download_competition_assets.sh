@@ -36,10 +36,7 @@ echo "[download] MoGe depth estimator"
   --local-dir "$asset_root/models/moge-2-vitb-normal" \
   --max-workers "${HF_MAX_WORKERS:-4}"
 
-echo "[download] RoboTwin LeRobot clean-50 only (no randomized data)"
-"$hf_bin" download SJTU-DENG-Lab/RoboTwin-LeRobot --repo-type dataset \
-  --include '*/aloha-agilex_clean_50/**' \
-  --local-dir "$asset_root/data/RoboTwin-LeRobot" \
-  --max-workers "${HF_MAX_WORKERS:-4}"
+echo "[download] official RoboTwin 2.0 LeRobot clean-only dataset"
+bash "$repo_root/scripts/download_robotwin_clean_data.sh"
 
 echo "[download] complete"

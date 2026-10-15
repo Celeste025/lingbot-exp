@@ -32,11 +32,13 @@ def build_lr_scheduler(
     optimizer: "Optimizer",
     train_steps: int,
     lr: float = 1e-3,
-    lr_decay_style: Literal["constant", "linear", "cosine", "two_stage"] = "constant",
+    lr_decay_style: Literal["constant", "linear", "cosine", "cosine_resume", "two_stage"] = "constant",
     lr_decay_ratio: float = 1.0,
     lr_warmup_ratio: float = 0.0,
     lr_min: float = 1e-7,
     lr_start: float = 0.0,
+    lr_anneal_start_step: int = 0,
+    lr_anneal_start: float | None = None,
 ):
     lr_warmup_steps = int(train_steps * lr_warmup_ratio)
     if lr_decay_style == "constant":
@@ -66,6 +68,19 @@ def build_lr_scheduler(
             min_lr=lr_min,
             lr_start=lr_start,
         )
+
+    if lr_decay_style == "cosine_resume":
+        if lr_anneal_start is None or not (0 <= lr_anneal_start_step < train_steps):
+            raise ValueError("cosine_resume requires an anneal start LR and a start step before train_steps")
+        if not (0 < lr_min < lr_anneal_start <= lr):
+            raise ValueError("cosine_resume requires 0 < lr_min < lr_anneal_start <= lr")
+
+        def lr_lambda(current_step: int) -> float:
+            progress = min(1.0, max(0.0, (current_step - lr_anneal_start_step) / (train_steps - lr_anneal_start_step)))
+            target_lr = lr_min + (lr_anneal_start - lr_min) * (1 + math.cos(math.pi * progress)) / 2
+            return target_lr / lr
+
+        return LambdaLR(optimizer, lr_lambda)
 
     if lr_decay_style == "two_stage":
         return get_two_stage_constant_schedule_with_warmup(

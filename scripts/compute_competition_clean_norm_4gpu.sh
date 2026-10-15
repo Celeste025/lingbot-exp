@@ -5,8 +5,8 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 asset_root="${ASSET_ROOT:-/data1/models/lingbot-vla2}"
 env_prefix="${LINGBOT_ENV_PREFIX:-$asset_root/envs/lingbotvla}"
-data_list="$repo_root/assets/training_data/robotwin_clean_50.txt"
-norm_path="${NORM_STATS:-$asset_root/norm_stats/robotwin_clean_50.json}"
+data_list="${CLEAN_LIST:-$repo_root/assets/training_data/robotwin_official_clean_v21.txt}"
+norm_path="${NORM_STATS:-$asset_root/norm_stats/robotwin_official_clean_v21.json}"
 work_dir="${NORM_WORK_DIR:-$asset_root/outputs/norm_clean_4gpu}"
 
 [[ -f "$data_list" ]] || { echo "Missing data list: $data_list" >&2; exit 1; }
@@ -17,6 +17,7 @@ while read -r robot data_path; do
     exit 1
   }
 done < "$data_list"
+python3 "$repo_root/scripts/validate_robotwin_joint_data.py" "$data_list"
 
 mkdir -p "$(dirname "$norm_path")" "$work_dir"
 export PATH="$env_prefix/bin:$PATH"

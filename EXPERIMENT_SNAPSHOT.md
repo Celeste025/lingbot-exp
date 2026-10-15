@@ -1,35 +1,21 @@
-# LingBot-VLA2 RoboTwin clean-50 experiment snapshot
+# LingBot-VLA2 RoboTwin official-clean experiment
 
-This repository is a code-and-metadata snapshot for the Tianchi RoboTwin preliminary experiment. It intentionally excludes model weights, training data, simulator assets, Python/Conda environments, and access tokens.
+This repository contains code and small reproducibility artifacts for the Tianchi RoboTwin experiment. Model weights, raw training data, simulator assets, environments, and credentials are stored outside Git.
 
-## Training record
+## Current valid run
 
-- Base model: LingBot-VLA2.
-- Training data: competition clean 50 tasks × 50 demonstrations only.
-- Hardware: 4 GPUs.
-- Batch configuration: global batch size 256, microbatch size 32 per GPU, gradient accumulation 2.
-- Training length: 16,000 steps.
-- Final recorded loss: `0.01129150390625` at step 16,000.
-- Full-state checkpoint policy: every 4,000 steps; inference checkpoint policy: every 2,000 steps.
-- Remote checkpoint archive: ModelScope repository `Celeste025/lingbot-vla2-robotwin-clean50-checkpoints`.
+- Data: official RoboTwin2.0 LeRobot v2.1 **clean** trajectories, using the 14-dimensional Aloha joint-space action mapping. No randomized trajectories enter training.
+- Training: four GPUs, global batch size 256, 2,144 optimizer steps per epoch.
+- Step 8,000: full-state checkpoint archived in `Celeste025/lingbot-vla2-robotwin-clean50-checkpoints` on ModelScope. The 50-task × 10-episode evaluation completed with **153/500 (30.6%) clean** and **90/500 (18.0%) randomized** success.
+- Step 8,000 to 20,000: continuation is running from the full checkpoint. The base learning rate starts at `8e-5` and cosine-anneals to `4e-5` at step 20,000. The continuation launcher is `scripts/run_official_clean_8k_to_20k.sh`.
+- Checkpoints: inference weights every 2,000 steps; full optimizer/resume state every 4,000 steps. Upload and checksum verification run concurrently with training. Older local checkpoints are removed only after their ModelScope copies are verified.
 
-## Contents retained for reporting
+`experiment_artifacts/training/official_clean_8k_loss.jsonl` is the fixed 8,000-step loss record. The two `experiment_artifacts/evaluation/official_clean_8k_*/stats.txt` files are the complete evaluation summaries. `reports/official_clean_8k_loss.png` plots the training curve.
 
-- `experiment_artifacts/training/loss.jsonl`: per-step loss and optimizer metrics through step 16,000.
-- `experiment_artifacts/training/resolved_train_config.yaml`: resolved training invocation.
-- `experiment_artifacts/training/robotwin_clean_50_norm_stats.json`: normalization statistics.
-- `experiment_artifacts/training/*future_metrics.jsonl`: auxiliary future-video metrics at 5k, 10k, and 15k.
-- `experiment_artifacts/checkpoints/global_step_16000.CHECKSUMS.sha256`: checksum manifest for the final recoverable checkpoint.
-- `experiment_artifacts/evaluation/smoke_12k_clean/`: initial smoke logs. This smoke is expected to be non-passing: it records the missing official RoboTwin Objaverse asset discovered during environment bring-up, before downloading the asset package.
+## Superseded artifacts
 
-## Evaluation convention
-
-The launcher supports `--episodes_per_task`. Use 1 for integration smoke tests, 10 for checkpoint screening (50 clean + 50 random tasks = 1,000 rollouts), and 100 for the final official-style evaluation.
-
-## Recovery pointers
-
-Model weights and full optimizer state are deliberately not in Git. Retrieve archived checkpoints from the ModelScope repository above; verify their checksum against the retained manifest before use.
+The older files under `experiment_artifacts/training/` with generic names, including `loss.jsonl` and `resolved_train_config.yaml`, describe a **different 16-dimensional end-effector run**. Its checkpoints were invalid for the 14-dimensional competition setup and were removed from ModelScope. Those files are retained only as debugging history; do not use them to resume or report the current model.
 
 ## Security
 
-Do not commit GitHub PATs, ModelScope tokens, raw datasets, model weights, or downloaded RoboTwin assets.
+Do not commit access tokens, raw datasets, checkpoint tensors, or downloaded RoboTwin assets.

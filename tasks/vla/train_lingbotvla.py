@@ -1,7 +1,10 @@
 import json
 import os
 import re
+import shutil
+import sys
 import time
+from pathlib import Path
 from dataclasses import asdict, dataclass, field
 from functools import partial
 from io import BytesIO
@@ -37,6 +40,11 @@ from lingbotvla.utils.async_hf_checkpoint import AsyncHFCheckpointSaver
 from lingbotvla.utils.arguments import EvalArguments, DataArguments, ModelArguments, TrainingArguments, parse_args, save_args
 from lingbotvla.utils.dist_utils import all_reduce
 from lingbotvla.models.config_registry import get_config_registry
+
+# This file is also launched by path through torchrun, so add the repo root for
+# the dependency-free preflight used by the standalone clean-data scripts.
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from scripts.validate_robotwin_joint_data import validate_dataset_source
 
 from lingbotvla.models.vla.vision_models.module_utils import (
     build_depth_model,
@@ -118,6 +126,10 @@ def get_moe_param_groups(model: "torch.nn.Module", args_train) -> Optional[List[
 
 @dataclass
 class MyTrainingArguments(TrainingArguments):
+    rolling_checkpoint_retention: bool = field(
+        default=False,
+        metadata={"help": "Before a new save, remove the older same-kind checkpoint only after ModelScope verification."},
+    )
     save_final_checkpoint: bool = field(
         default=True,
         metadata={"help": "Save a checkpoint when max_steps is reached even if it is not a save_steps boundary."},
@@ -342,6 +354,19 @@ class Arguments:
 
 def main():
     args = parse_args(Arguments)
+    if args.train.rolling_checkpoint_retention and (
+        args.train.save_steps != 2000 or args.train.full_state_save_steps != 4000
+    ):
+        raise ValueError("Rolling checkpoint retention requires save_steps=2000 and full_state_save_steps=4000")
+    if args.data.datasets_type == "vla":
+        schema_errors = validate_dataset_source(args.data.data_name, args.data.train_path)
+        if schema_errors:
+            details = "\n".join(schema_errors[:4])
+            raise ValueError(
+                f"RoboTwin training data is incompatible with the 14-D qpos robot config "
+                f"({len(schema_errors)} dataset errors):\n{details}\n"
+                "Use 14-D Aloha joint-space LeRobot data and recompute normalization stats."
+            )
     logger.info(f"Process rank: {args.train.global_rank}, world size: {args.train.world_size}")
     logger.info_rank0(json.dumps(asdict(args), indent=2))
     torch.cuda.set_device(f"cuda:{args.train.local_rank}")
@@ -574,6 +599,8 @@ def main():
         lr_decay_ratio=args.train.lr_decay_ratio,
         lr_warmup_ratio=args.train.lr_warmup_ratio,
         lr_start=args.train.lr_start,
+        lr_anneal_start_step=args.train.lr_anneal_start_step,
+        lr_anneal_start=args.train.lr_anneal_start,
     )
 
     if args.train.global_rank == 0:
@@ -679,6 +706,20 @@ def main():
                 start_epoch = global_step // args.train.train_steps
                 start_step = global_step % args.train.train_steps
                 lr_scheduler.load_state_dict(state["extra_state"]["lr_scheduler"])
+                if args.train.lr_decay_style == "cosine_resume":
+                    expected_step = args.train.lr_anneal_start_step
+                    if global_step < expected_step:
+                        raise ValueError(f"cosine_resume checkpoint step {global_step} precedes {expected_step}")
+                    # Loading the old optimizer restores its previous LR. Apply the
+                    # new schedule at this global step before the next optimizer step.
+                    if not (len(optimizer.param_groups) == len(lr_scheduler.base_lrs) == len(lr_scheduler.lr_lambdas)):
+                        raise ValueError("cosine_resume optimizer and scheduler parameter groups differ")
+                    resumed_lrs = [base_lr * lr_lambda(global_step)
+                                   for base_lr, lr_lambda in zip(lr_scheduler.base_lrs, lr_scheduler.lr_lambdas)]
+                    for group, resumed_lr in zip(optimizer.param_groups, resumed_lrs):
+                        group["lr"] = resumed_lr
+                    lr_scheduler._last_lr = resumed_lrs
+                    logger.info_rank0(f"Applied cosine_resume LR at step {global_step}: {resumed_lrs}")
                 if start_step > 0 and args.train.resume_dataloader_state:
                     train_dataloader.load_state_dict(state["extra_state"]["train_dataloader"])
                 environ_meter.load_state_dict(state["extra_state"]["environ_meter"])
@@ -694,8 +735,12 @@ def main():
                 logger.info_rank0(f"Failed to load checkpoint {cp}: {repr(e)}. Trying older one...")
                 continue
         if not loaded:
+            if args.train.lr_decay_style == "cosine_resume":
+                raise RuntimeError(f"cosine_resume requires a valid full-state checkpoint: {last_err}")
             logger.info_rank0("Starting training from scratch. No valid checkpoint could be loaded.")
     else:
+        if args.train.lr_decay_style == "cosine_resume":
+            raise RuntimeError("cosine_resume requires a full-state checkpoint to resume")
         logger.info_rank0("Starting training from scratch.")
 
     helper.empty_cache()
@@ -1102,6 +1147,23 @@ def main():
                                 )
 
             if args.train.save_steps and global_step % args.train.save_steps == 0:
+                if args.train.rolling_checkpoint_retention and global_step >= 6000:
+                    old_step = global_step - 4000
+                    old_dir = Path(args.train.save_checkpoint_path) / f"global_step_{old_step}"
+                    if old_dir.exists():
+                        kind = "full" if (old_dir / "optimizer").is_dir() else "inference"
+                        verified = Path(args.train.output_dir) / "archive_logs" / f"verified_{kind}_step{old_step}.sha256"
+                        deadline = time.monotonic() + 3 * 3600
+                        while not verified.is_file():
+                            if time.monotonic() >= deadline:
+                                raise RuntimeError(f"Cannot free {old_dir}: verified ModelScope archive marker missing: {verified}")
+                            if args.train.global_rank == 0:
+                                logger.info_rank0(f"Waiting for verified ModelScope archive before removing {old_dir}")
+                            time.sleep(30)
+                        if args.train.global_rank == 0:
+                            shutil.rmtree(old_dir)
+                            logger.info_rank0(f"Removed verified older checkpoint {old_dir} before saving step {global_step}")
+                    dist.barrier()
                 helper.empty_cache()
                 save_checkpoint_path = os.path.join(args.train.save_checkpoint_path, f"global_step_{global_step}")
                 save_full_state = (

@@ -24,4 +24,5 @@ exec bash experiment/robotwin/start_robotwin_infer_and_eval.sh \
   --num_gpus 1 \
   --gpu_ids "$gpu_id" \
   --num_per_gpu 1 \
+  --use_compile False \
   --no_video

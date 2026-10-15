@@ -135,7 +135,7 @@ print("flash_attn", getattr(flash_attn, "__version__", "unknown"))
 PY
 
 python -m pip install --no-deps \
-  "lerobot @ https://github.com/huggingface/lerobot/archive/refs/tags/v0.4.2.tar.gz"
+  "lerobot @ https://github.com/huggingface/lerobot/archive/refs/tags/v0.3.3.tar.gz"
 assert_torch_stack
 
 python -m pip install -e "${REPO_ROOT}" --no-deps

@@ -14,7 +14,10 @@ class WebsocketClientPolicy:
     See WebsocketPolicyServer for a corresponding server implementation.
     """
 
-    def __init__(self, host: str = "0.0.0.0", port: Optional[int] = None, api_key: Optional[str] = None) -> None:
+    # 0.0.0.0 is valid only as a server bind address.  A local client must
+    # connect through loopback; otherwise Linux accepts TCP then drops the
+    # WebSocket HTTP handshake.
+    def __init__(self, host: str = "127.0.0.1", port: Optional[int] = None, api_key: Optional[str] = None) -> None:
         self._uri = f"ws://{host}"
         if port is not None:
             self._uri += f":{port}"
@@ -42,8 +45,11 @@ class WebsocketClientPolicy:
                 )
                 metadata = unpackb(conn.recv())
                 return conn, metadata
-            except ConnectionRefusedError:
-                logging.info("Still waiting for server...")
+            # The socket can be listening while a large checkpoint is still
+            # initializing, which closes a WebSocket handshake instead of
+            # refusing TCP. Treat either state as transient readiness.
+            except (ConnectionRefusedError, OSError, websockets.exceptions.WebSocketException):
+                logging.info("Server not ready yet; retrying...")
                 time.sleep(5)
 
     @override

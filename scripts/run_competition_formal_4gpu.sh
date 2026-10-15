@@ -33,6 +33,26 @@ if (( available_bytes < minimum_bytes )); then
 fi
 
 echo "[formal] micro_batch=$MICRO_BATCH_SIZE accumulation=$GRADIENT_ACCUMULATION_STEPS global_batch=256"
+if [[ -d "$output_dir/checkpoints" ]] &&
+   compgen -G "$output_dir/checkpoints/global_step_*" >/dev/null &&
+   [[ ! -f "$output_dir/robotwin_data.sha256" ]]; then
+  echo "Existing checkpoints have no data provenance: $output_dir. Use a fresh OUTPUT_DIR for joint-space training." >&2
+  exit 1
+fi
+if [[ -f "$output_dir/robotwin_data.sha256" ]]; then
+  data_list="${CLEAN_LIST:-$repo_root/assets/training_data/robotwin_official_clean_v21.txt}"
+  norm_stats="${NORM_STATS:-$asset_root/norm_stats/robotwin_official_clean_v21.json}"
+  current_digest="$({
+    sha256sum "$data_list" "$norm_stats" "$repo_root/configs/robot_configs/robotwin.yaml"
+    while read -r robot data_path; do
+      sha256sum "$data_path/meta/info.json"
+    done < "$data_list"
+  } | sha256sum | cut -d' ' -f1)"
+  if [[ "$(cat "$output_dir/robotwin_data.sha256")" != "$current_digest" ]]; then
+    echo "Dataset, robot config, or norm stats differ from existing run: $output_dir. Use a fresh OUTPUT_DIR." >&2
+    exit 1
+  fi
+fi
 mkdir -p "$output_dir/checkpoints"
 bash "$repo_root/scripts/archive_checkpoints_modelscope.sh" \
   --checkpoint-root "$output_dir/checkpoints" --watch --poll-seconds 120 &

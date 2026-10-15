@@ -40,14 +40,12 @@ download_moge() {
 }
 
 validate_clean_list() {
-  local list="$repo_root/assets/training_data/robotwin_clean_50.txt"
-  [[ "$(wc -l < "$list")" -eq 50 ]] || { echo "Expected exactly 50 clean datasets" >&2; return 1; }
-  while read -r robot dataset; do
-    [[ "$robot" == robotwin && -d "$dataset" ]] || {
-      echo "Invalid clean dataset entry: $robot $dataset" >&2
-      return 1
-    }
-  done < "$list"
+  local list="${CLEAN_LIST:-$repo_root/assets/training_data/robotwin_official_clean_v21.txt}"
+  python3 "$repo_root/scripts/validate_robotwin_joint_data.py" "$list"
+  local robot dataset
+  read -r robot dataset < "$list"
+  [[ "$robot" == robotwin && -d "$dataset" ]] || return 1
+  python3 "$repo_root/scripts/validate_robotwin_official_clean.py" "$dataset"
 }
 
 select_four_idle_gpus() {
